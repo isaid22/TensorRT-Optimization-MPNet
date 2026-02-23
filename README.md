@@ -26,6 +26,28 @@ The accuracy of the quantized model heavily depends on the **calibration data**.
 
 The calibration process can be time-consuming. TensorRT allows you to cache the calibration results to a file. On subsequent runs, if the network and the calibrator have not changed, TensorRT can load the cache file to skip the calibration process, speeding up engine creation. In the script, this is handled by `read_calibration_cache` and `write_calibration_cache`.
 
+## INT8 Quantization and Calibration
+
+Calibration is the process of finding the actual range of floating-point values that flow through your model during inference. By feeding the model a small, representative sample of your data, TensorRT can observe the real-world minimum and maximum values for each layer's activations. This allows it to create a much more precise and tailored mapping to the INT8 range, which is the key to preserving accuracy.
+
+### What Was Created for Calibration?
+
+In this project, two main components were created specifically for this purpose, as defined in `build_int8_engine.py`:
+
+1.  **The `MyCalibrator` Class:** This is a custom Python class that acts as a data provider for TensorRT. It inherits from TensorRT's `IInt8MinMaxCalibrator` and its job is to feed batches of calibration data to the TensorRT builder.
+
+2.  **The Calibration Dataset (`calib_data` directory):** This directory holds the actual data used for the calibration process. It contains pre-processed, real-world examples of inputs that the MPNet model would expect to see.
+
+### How Does It Work?
+
+When you run `python build_int8_engine.py`, the following sequence of events occurs for calibration:
+
+1.  **TensorRT Asks for Data:** The TensorRT builder detects that it needs to perform INT8 calibration and calls the `get_batch()` method of your `MyCalibrator` object.
+2.  **Data Provisioning:** Your `get_batch()` method loads a batch of data from the `.npy` files in the `calib_data` directory, copies it to the GPU, and returns the GPU memory pointers to TensorRT.
+3.  **TensorRT Observes Activations:** TensorRT performs a forward pass through the network using the provided data. It records the minimum and maximum activation values for every tensor in the graph. This is repeated for all the calibration batches.
+4.  **Calculating Scaling Factors:** After processing all batches, TensorRT uses the collected statistics to calculate a "scaling factor" for each tensor, which is used to map the observed floating-point range to the INT8 range.
+5.  **Caching the Results:** To save time on future runs, the `write_calibration_cache()` method is called to save these scaling factors to a `calibration.cache` file. On subsequent runs, this file is loaded, and the calibration process is skipped.
+
 ## The Quantization Workflow in `build_int8_engine.py`
 
 The script [build_int8_engine.py](build_int8_engine.py) is used to convert the ONNX model to a quantized INT8 TensorRT engine. You can run it using the following command:
@@ -164,3 +186,5 @@ The process is similar to running inference with a non-quantized engine, but you
 Here is a screen capture of the GPU activity during inference with the INT8 engine:
 
 ![GPU activity during INT8 inference](document_assets/mpnet-int8-tensorrt-inference.gif)
+
+This shows that inference is executed successfully in GPU.
