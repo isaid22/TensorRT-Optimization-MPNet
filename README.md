@@ -1,194 +1,166 @@
-# TensorRT-Optimization-MPNet
-This repo contains works for using TensorRT to optimize MPNet in FP16 data type. This is a minimal example to achieve the following:
+# Quantizing an ONNX Model to a TensorRT INT8 Engine
 
-1. Export an encoder model to ONNX format.
-2. Optimize the ONNX format model using TensorRT, with datatype FP16.
-3. Run an inference with one pass sample text.
+This document explains the process of converting an ONNX model to a quantized INT8 TensorRT engine. This process, known as Post-Training Quantization (PTQ), can significantly improve inference performance and reduce memory usage with a minimal loss in model accuracy.
 
-The following are explanations for each step. This example uses AWS `g5.4xlarge` instance with Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.9 (Ubuntu 24.04) ami-0f3d7b789119ccbfa. 
+The works are done in AWS g4.4xlarge instance with Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.9 (Ubuntu 24.04) ami-0f3d7b789119ccbfa.
 
-## ONNX Conversion
+We will refer to the `build_int8_engine.py` script as a practical example.
 
-The work to convert a native model to ONNX format is shown in [`export-to-onnx.py`](export-to-onnx.py). This script should be executed very quicky. The result is a folder `onnx_model`. This folder contains the following:
+## Key Concepts
 
-```
--rw-rw-r-- 1 ubuntu ubuntu       529 Feb 19 00:59 config.json
--rw-rw-r-- 1 ubuntu ubuntu 435760242 Feb 19 00:59 model.onnx
--rw-rw-r-- 1 ubuntu ubuntu      1615 Feb 19 00:59 tokenizer_config.json
--rw-rw-r-- 1 ubuntu ubuntu       964 Feb 19 00:59 special_tokens_map.json
--rw-rw-r-- 1 ubuntu ubuntu    231536 Feb 19 00:59 vocab.txt
--rw-rw-r-- 1 ubuntu ubuntu    710944 Feb 19 00:59 tokenizer.json
-```
+### 1. Post-Training Quantization (PTQ)
 
-here, the model is converted to onnx format as shown in `model.onnx`. The model configuration and hyperparameters are shown in `config.json`. 
+PTQ is a technique to convert a pre-trained FP32 model to a lower-precision representation, like INT8, without needing to retrain the model. This is achieved by analyzing the distribution of weights and activations in the model.
 
-## TensorRT Optimization
-This step is done with [`build_engine.py`](./build_engine.py). Notice the lines
+### 2. The INT8 Calibrator
 
-```
-# Format: (Batch, Length)
-# (Min Batch, Min Len), (Opt Batch, Opt Len), (Max Batch, Max Len)
-profile.set_shape("input_ids", (1, 1), (1, 128), (1, 512))
-profile.set_shape("attention_mask", (1, 1), (1, 128), (1, 512))
-```
+To perform INT8 quantization, TensorRT needs to determine the dynamic range (min and max values) of the intermediate activation tensors in the network. This is the job of a **calibrator**. The calibrator feeds a representative set of input data through the network and records the activation ranges.
 
-The first dimension is always 1 in this case. This is because the batch size of choice here is 1, regardless of token lengths, and I want to optimize this model to handle this batch size and token length. 
+TensorRT provides several calibrator interfaces. The script uses `trt.IInt8MinMaxCalibrator`, which is a common choice.
 
-If I have a set of preferred batch sizes and token lengths in mind, I will modify above to:
+### 3. Calibration Data
 
-```
-profile.set_shape("input_ids", (1, 1), (16, 128), (32, 512))
-profile.set_shape("attention_mask", (1, 1), (16, 128), (32, 512))
+The accuracy of the quantized model heavily depends on the **calibration data**. This data should be a small, representative subset of your validation dataset. It needs to cover the expected distribution of inputs that the model will see during inference. In the script, this data is loaded from the `calib_data` directory.
+
+### 4. Calibration Cache
+
+The calibration process can be time-consuming. TensorRT allows you to cache the calibration results to a file. On subsequent runs, if the network and the calibrator have not changed, TensorRT can load the cache file to skip the calibration process, speeding up engine creation. In the script, this is handled by `read_calibration_cache` and `write_calibration_cache`.
+
+## The Quantization Workflow in `build_int8_engine.py`
+
+The script [build_int8_engine.py](build_int8_engine.py) is used to convert the ONNX model to a quantized INT8 TensorRT engine. You can run it using the following command:
+
+```bash
+python build_int8_engine.py
 ```
 
-Now the model will be optimized by TensorRT to handle these batch sizes. 
+The script demonstrates the end-to-end process of creating an INT8 engine.
 
-You may see 
+### Step 1: Standard TensorRT Initialization
 
-```
-Building TensorRT engine from onnx_model/model.onnx...
-Engine saved to mpnet.engine
-``` 
+The script starts by creating the standard TensorRT objects:
 
-on the terminal. Notice the size of pf mpnet.engine. It should be half of model.onnx, because of FP16 datatype.
+-   `trt.Logger`: For logging TensorRT messages.
+-   `trt.Builder`: The main object for creating an engine.
+-   `trt.INetworkDefinition`: To define the network structure.
 
-## Inference
-This step is done with [`inference-trt.py`](inference-trt.py). This script performs the following steps:
-
-1. Loads the Engine: Deserializes mpnet.engine into a TensorRT runtime.
-2. Prepares Input: Uses the Hugging Face tokenizer to convert a text string ("This is an example sentence.") into input_ids and attention_mask.
-3. Allocates Memory: Allocates pinned memory on the Host (CPU) and standard memory on the Device (GPU). 
-4. Executes: Copies inputs to GPU, runs the TensorRT engine execution context, and copies the result back to CPU.
-Result: It prints the final embedding tensor.
-
-[!IMPORTANT]
-Memory lifecycle is an important nuace to keep in mind. In the code:
-
-```
-for i in range(self.engine.num_io_tensors):
-    # ...
-    device_mem = cuda.mem_alloc(host_mem.nbytes)  # <--- created here
-    
-    # We pass the memory ADDRESS (integer) to TensorRT
-    self.context.set_tensor_address(tensor_name, int(device_mem)) 
-    
-    # End of loop iteration
+```python
+logger = trt.Logger(trt.Logger.INFO)
+builder = trt.Builder(logger)
+network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
 ```
 
-device_mem is a local Python object (of type pycuda.driver.DeviceAllocation). When the loop iteration finishes, device_mem goes out of scope. Since nothing else is holding onto this object, Python's garbage collector destroys it.
-The Consequence: When device_mem is destroyed, PyCUDA automatically frees the GPU memory. Even though we gave the address to TensorRT, that address becomes invalid immediately. When execute_async_v3 runs later, it tries to access freed memory, causing a crash or garbage output.
+### Step 2: Parsing the ONNX Model
 
-The Fix
-I added a list to keep these objects alive explicitly.
+The pre-trained ONNX model is loaded and parsed to populate the network definition.
 
-Line 20: I initialized a list to store the references.
-```
-self.allocations = [] # Keep references to prevent GC
-```
-
-Line 32: Inside the loop, I saved the device_mem object into that list.
-```
-device_mem = cuda.mem_alloc(host_mem.nbytes)
-self.allocations.append(device_mem) # Store reference !!!
+```python
+parser = trt.OnnxParser(network, logger)
+with open("path/to/your/model.onnx", "rb") as model:
+    parser.parse(model.read())
 ```
 
-Line 51: After execution is finished, I clear the list, allowing the memory to be freed normally.
-```
-self.allocations = []
-```
+### Step 3: Configuring the Builder for INT8
 
-This ensures the GPU memory remains allocated for the entire duration of the inference call.
+This is the crucial step where we instruct TensorRT to build an INT8 engine.
 
-### Run setup
+1.  **Create a Builder Config**: This object holds the configuration for the engine build.
+2.  **Set the INT8 Flag**: This flag tells the builder to quantize the network to INT8.
 
-The for loop (lines 26–51) runs entirely on the CPU and is purely for setup. It iterates 3 times (for input_ids, attention_mask, and the output tensor) to do the following:
-
-1. Allocate memory (cuda.mem_alloc).
-2. Copy data from CPU to GPU (cuda.memcpy_htod_async).
-3. Tell TensorRT where that memory is (set_tensor_address).
-Because this is Python code running on the CPU, it must run sequentially.
-
-The actual GPU execution happens at Line 53, completely outside the loop:
-```
-self.context.execute_async_v3(self.stream.handle)
+```python
+config = builder.create_builder_config()
+config.set_flag(trt.BuilderFlag.INT8)
 ```
 
-This is the single command that launches the entire neural network on the GPU. Once this line triggers, the GPU takes over and runs all the layers of the model, utilizing its massive parallelism.
+### Step 4: Implementing the Calibrator (`MyCalibrator`)
 
-In summary:
+The script defines a class `MyCalibrator` that inherits from `trt.IInt8MinMaxCalibrator`. Here is the implementation:
 
-The Loop: Serial Setup (CPU) - "Here is the data."
-Line 53: Parallel Execution (GPU) - "Run the model."
+```python
+# Simple calibrator for demonstration
+class MyCalibrator(trt.IInt8MinMaxCalibrator):
+    def __init__(self, data_dir, cache_file):
+        trt.IInt8MinMaxCalibrator.__init__(self)
+        self.data_dir = data_dir
+        self.cache_file = cache_file
+        self.batch_size = 1
+        self.input_names = ["input_ids", "attention_mask"]
+        self.input_files = {
+            "input_ids": np.load(os.path.join(self.data_dir, "input_ids.npy")),
+            "attention_mask": np.load(os.path.join(self.data_dir, "attention_mask.npy"))
+        }
+        self.current_index = 0
+        self.device_inputs = {}
+        for name in self.input_names:
+            self.device_inputs[name] = cuda.mem_alloc(self.input_files[name][0].nbytes * self.batch_size)
 
+    def get_batch_size(self):
+        return self.batch_size
 
-### Execution
+    def get_batch(self, names):
+        if self.current_index + self.batch_size > self.input_files["input_ids"].shape[0]:
+            return None
+        
+        batch_data = {}
+        for name in self.input_names:
+            batch_data[name] = self.input_files[name][self.current_index:self.current_index+self.batch_size]
 
-The actual GPU execution happens at Line 53, completely outside the loop:
+        for name in names:
+            cuda.memcpy_htod(self.device_inputs[name], batch_data[name])
+        
+        self.current_index += self.batch_size
+        return [int(self.device_inputs[name]) for name in names]
 
-```
-self.context.execute_async_v3(self.stream.handle)
-```
-This is the single command that launches the entire neural network on the GPU. Once this line triggers, the GPU takes over and runs all the layers of the model, utilizing its massive parallelism.
+    def read_calibration_cache(self):
+        if os.path.exists(self.cache_file):
+            with open(self.cache_file, "rb") as f:
+                return f.read()
 
-Basically: 
-The Loop: Serial Setup (CPU) - "Here is the data."
-Line 53: Parallel Execution (GPU) - "Run the model."
-
-`execute_async_v3` takes no data arguments. That is because the data was already registered inside the `context` object before that line was called.
-
-Points to look at in inference-trt.py:
-
-The Handshake (Line 48):
-
-```
-self.context.set_tensor_address(tensor_name, int(device_mem))
-```
-
-This is the crucial line. You are telling the TensorRT context: "Hey, when you run, if you need the tensor named input_ids, look at GPU memory address 0x12345678."
-
-The Trigger (Line 53):
-```
-self.context.execute_async_v3(self.stream.handle)
-```
-
-When you call this, TensorRT doesn't need arguments because it already has the map of names to memory addresses. It just looks up the address you registered in step 1 and starts reading from there.
-
-
-
-The loop `for i in range(self.engine.num_io_tensors)` iterates over ALL tensors that go in or out of the model.
-
-For this MPNet model, `self.engine.num_io_tensors` is likely 3. The loop runs 3 times:
-
-1. Iteration 1 (Input): Tensor is "input_ids".
-get_tensor_mode returns INPUT.
-Action: Copies the text data to GPU.
-2. Iteration 2 (Input): Tensor is "attention_mask".
-get_tensor_mode returns INPUT.
-Action: Copies the mask data to GPU.
-3. Iteration 3 (Output): Tensor is "last_hidden_state" (or similar).
-get_tensor_mode returns OUTPUT.
-Action: Enters the else block.
-It doesn't copy anything to the GPU here. Instead, it saves the memory pointers (output_mem, d_output) so that after the model runs, it knows where to copy the results back from.
-So, the else block is guaranteed to run exactly once (for this model) simply because the model has an output layer.
-
-Below is expected result of inference:
-```
-/home/ubuntu/ai_venv/lib/python3.12/site-packages/torch/cuda/__init__.py:63: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
-  import pynvml  # type: ignore[import]
-Inference output (embedding):
-[[[ 0.05776978 -0.15673828 -0.01065826 ... -0.00502777  0.15405273
-   -0.019104  ]
-  [ 0.01416016 -0.22570801 -0.09771729 ... -0.04104614  0.04962158
-   -0.01191711]
-  [-0.02050781 -0.41845703 -0.07580566 ... -0.11193848  0.11920166
-    0.05178833]
-  ...
-  [ 0.05697632  0.01589966 -0.00187302 ...  0.046875    0.10852051
-   -0.02911377]
-  [ 0.05697632  0.01589966 -0.00187302 ...  0.046875    0.10852051
-   -0.02911377]
-  [ 0.05697632  0.01589966 -0.00187302 ...  0.046875    0.10852051
-   -0.02911377]]]
+    def write_calibration_cache(self, cache):
+        with open(self.cache_file, "wb") as f:
+            f.write(cache)
 ```
 
-The terminal prints out the output embedding vector.
+-   **`__init__`**: Initializes the calibrator, loading the calibration data and allocating CUDA memory for the inputs.
+-   **`get_batch_size()`**: Returns the batch size of the calibration data.
+-   **`get_batch()`**: This is the core method. TensorRT calls this repeatedly to get batches of calibration data. The data is copied from the host (CPU) to the device (GPU).
+-   **`read_calibration_cache()` / `write_calibration_cache()`**: These methods handle loading and saving the calibration cache.
+
+### Step 5: Setting the Calibrator
+
+The builder configuration is updated with an instance of our calibrator.
+
+```python
+calibrator = MyCalibrator("calib_data", "calibration.cache")
+config.int8_calibrator = calibrator
+```
+
+### Step 6: Building and Saving the Engine
+
+Finally, the builder uses the network definition and the INT8 configuration to build the quantized engine. The resulting engine is then serialized to a file for later use in inference.
+
+```python
+engine = builder.build_serialized_network(network, config)
+with open("mpnet-int8.engine", "wb") as f:
+    f.write(engine)
+```
+
+Here is a screen capture of the GPU activity during this process:
+
+![GPU activity during INT8 quantization](document_assets/mpnet-int8-tensorrt.gif)
+
+By following these steps, you can leverage TensorRT's PTQ capabilities to optimize your models for high-performance inference on NVIDIA GPUs.
+
+## Inference with the INT8 Engine
+
+After building the INT8 engine, the next step is to use it for inference. The script [inference-int8-trt.py](inference-int8-trt.py) is used to run inference with the generated INT8 engine. You can launch it with the following command:
+
+```bash
+python inference-int8-trt.py
+```
+
+The process is similar to running inference with a non-quantized engine, but you will be loading the `.engine` file you just created.
+
+Here is a screen capture of the GPU activity during inference with the INT8 engine:
+
+![GPU activity during INT8 inference](document_assets/mpnet-int8-tensorrt-inference.gif)
