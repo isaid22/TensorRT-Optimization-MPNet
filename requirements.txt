@@ -1,0 +1,11 @@
+numpy==1.26.4
+optimum==2.1.0
+optimum-onnx==0.1.0
+pycuda==2026.1
+ray==2.53.0
+tensorrt==10.13.3.9.post1
+tensorrt_cu13==10.13.3.9.post1
+tensorrt_cu13_bindings==10.13.3.9.post1
+tensorrt_cu13_libs==10.13.3.9.post1
+tensorrt_llm==1.1.0
+transformers==4.56.0
