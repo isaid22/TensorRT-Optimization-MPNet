@@ -13,6 +13,14 @@ class TRTInference:
         self.context = self.engine.create_execution_context()
         self.stream = cuda.Stream()
 
+    def describe_engine_io(self):
+        print("Engine I/O:")
+        for i in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(i)
+            dtype = trt.nptype(self.engine.get_tensor_dtype(i))
+            mode = "Input" if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT else "Output"
+            print(f"  {mode}: {name}, dtype: {dtype}")
+
     def infer(self, input_ids, attention_mask):
         # Set concrete shapes so dynamic dims (-1) are resolved before allocation.
         self.context.set_input_shape("input_ids", input_ids.shape)
@@ -65,6 +73,7 @@ class TRTInference:
 def main():
     tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
     trt_inference = TRTInference("mpnet-int8.engine")
+    trt_inference.describe_engine_io()
 
     text = "This is an example sentence."
     inputs = tokenizer(text, return_tensors="np", padding="max_length", max_length=128, truncation=True)
