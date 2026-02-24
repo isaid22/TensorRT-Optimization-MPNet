@@ -167,7 +167,7 @@ with open("mpnet-int8.engine", "wb") as f:
     f.write(engine)
 ```
 
-Here is a screen capture of the GPU activity during this process:
+Here is video capture of the GPU activity during this process:
 
 ![GPU activity during INT8 quantization](document_assets/mpnet-int8-tensorrt.gif?raw=true)
 
@@ -183,7 +183,7 @@ python inference-int8-trt.py
 
 The process is similar to running inference with a non-quantized engine, but you will be loading the `.engine` file you just created.
 
-Here is a screen capture of the GPU activity during inference with the INT8 engine:
+Here is a video capture of the GPU activity during inference with the INT8 engine:
 
 ![GPU activity during INT8 inference](document_assets/mpnet-int8-tensorrt-inference.gif?raw=true)
 
