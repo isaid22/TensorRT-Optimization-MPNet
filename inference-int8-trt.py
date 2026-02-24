@@ -17,7 +17,7 @@ class TRTInference:
         print("Engine I/O:")
         for i in range(self.engine.num_io_tensors):
             name = self.engine.get_tensor_name(i)
-            dtype = trt.nptype(self.engine.get_tensor_dtype(i))
+            dtype = self.engine.get_tensor_dtype(name)
             mode = "Input" if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT else "Output"
             print(f"  {mode}: {name}, dtype: {dtype}")
 
