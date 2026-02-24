@@ -2,7 +2,9 @@
 
 This document explains the process of converting an ONNX model to a quantized INT8 TensorRT engine. This process, known as Post-Training Quantization (PTQ), can significantly improve inference performance and reduce memory usage with a minimal loss in model accuracy.
 
-The works are done in AWS g4.4xlarge instance with Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.9 (Ubuntu 24.04) ami-0f3d7b789119ccbfa.
+The works are done in AWS g5.4xlarge instance with Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.9 (Ubuntu 24.04) ami-0f3d7b789119ccbfa.
+
+For TensorRT basics, see [TensorRT-COnversion.md](./TensorRT-Conversion.md)
 
 We will refer to the `build_int8_engine.py` script as a practical example.
 
@@ -39,6 +41,8 @@ In this project, two main components were created specifically for this purpose,
 2.  **The Calibration Dataset (`calib_data` directory):** This directory holds the actual data used for the calibration process. It contains pre-processed, real-world examples of inputs that the MPNet model would expect to see.
 
 ### How Does It Work?
+
+For a detailed explanation of calibration, see [calibration.md](./calibration.md)
 
 When you run `python build_int8_engine.py`, the following sequence of events occurs for calibration:
 
