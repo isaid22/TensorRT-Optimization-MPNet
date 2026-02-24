@@ -169,7 +169,7 @@ with open("mpnet-int8.engine", "wb") as f:
 
 Here is a screen capture of the GPU activity during this process:
 
-![GPU activity during INT8 quantization](document_assets/mpnet-int8-tensorrt.gif)
+![GPU activity during INT8 quantization](document_assets/mpnet-int8-tensorrt.gif?raw=true)
 
 By following these steps, you can leverage TensorRT's PTQ capabilities to optimize your models for high-performance inference on NVIDIA GPUs.
 
@@ -185,6 +185,10 @@ The process is similar to running inference with a non-quantized engine, but you
 
 Here is a screen capture of the GPU activity during inference with the INT8 engine:
 
-![GPU activity during INT8 inference](document_assets/mpnet-int8-tensorrt-inference.gif)
+![GPU activity during INT8 inference](document_assets/mpnet-int8-tensorrt-inference.gif?raw=true)
 
-This shows that inference is executed successfully in GPU.
+The terminal will show the output of inference as embedding:
+
+![Model output](./document_assets/int8-inference-output.png)
+
+This shows that inference is executed successfully in GPU, and the embedding vector is shown with valid values.
